@@ -26,13 +26,10 @@ public class HotelController {
 
     private final HotelService hotelService;
 
-    /**
-     * GET /api/v1/hotels - получить все отели (USER)
-     */
     @GetMapping
     @Operation(summary = "Get all hotels", description = "Returns list of all hotels")
     public ResponseEntity<List<HotelDTO>> getAllHotels(
-            @RequestParam(required = false) String city) {
+            @RequestParam(value = "city", required = false) String city) {  // ✅ Явное имя
 
         log.info("GET /api/v1/hotels - city filter: {}", city);
 
@@ -43,20 +40,16 @@ public class HotelController {
         return ResponseEntity.ok(hotels);
     }
 
-    /**
-     * GET /api/v1/hotels/{id} - получить отель по ID (USER)
-     */
     @GetMapping("/{id}")
     @Operation(summary = "Get hotel by ID", description = "Returns hotel details by ID")
-    public ResponseEntity<HotelDTO> getHotelById(@PathVariable Long id) {
+    public ResponseEntity<HotelDTO> getHotelById(
+            @PathVariable(value = "id") Long id) {  // ✅ Явное имя
+
         log.info("GET /api/v1/hotels/{}", id);
         HotelDTO hotel = hotelService.getHotelById(id);
         return ResponseEntity.ok(hotel);
     }
 
-    /**
-     * POST /api/v1/hotels - создать новый отель (ADMIN)
-     */
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
@@ -72,9 +65,6 @@ public class HotelController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
-    /**
-     * PUT /api/v1/hotels/{id} - обновить отель (ADMIN)
-     */
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
@@ -83,7 +73,7 @@ public class HotelController {
             security = @SecurityRequirement(name = "Bearer Authentication")
     )
     public ResponseEntity<HotelDTO> updateHotel(
-            @PathVariable Long id,
+            @PathVariable(value = "id") Long id,  // ✅ Явное имя
             @Valid @RequestBody CreateHotelRequest request) {
 
         log.info("PUT /api/v1/hotels/{} - updating hotel", id);
@@ -91,9 +81,6 @@ public class HotelController {
         return ResponseEntity.ok(updated);
     }
 
-    /**
-     * DELETE /api/v1/hotels/{id} - удалить отель (ADMIN)
-     */
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
@@ -101,7 +88,9 @@ public class HotelController {
             description = "Deletes hotel by ID (ADMIN only)",
             security = @SecurityRequirement(name = "Bearer Authentication")
     )
-    public ResponseEntity<Void> deleteHotel(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteHotel(
+            @PathVariable(value = "id") Long id) {  // ✅ Явное имя
+
         log.info("DELETE /api/v1/hotels/{}", id);
         hotelService.deleteHotel(id);
         return ResponseEntity.noContent().build();

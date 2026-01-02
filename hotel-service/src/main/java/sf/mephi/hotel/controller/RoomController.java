@@ -28,9 +28,6 @@ public class RoomController {
 
     private final RoomService roomService;
 
-    /**
-     * GET /api/v1/rooms - получить все доступные номера (USER)
-     */
     @GetMapping
     @Operation(summary = "Get available rooms", description = "Returns list of all available rooms")
     public ResponseEntity<List<RoomDTO>> getAvailableRooms() {
@@ -39,9 +36,6 @@ public class RoomController {
         return ResponseEntity.ok(rooms);
     }
 
-    /**
-     * GET /api/v1/rooms/recommend - получить рекомендованные номера (USER)
-     */
     @GetMapping("/recommend")
     @Operation(
             summary = "Get recommended rooms",
@@ -53,20 +47,16 @@ public class RoomController {
         return ResponseEntity.ok(rooms);
     }
 
-    /**
-     * GET /api/v1/rooms/{id} - получить номер по ID (USER)
-     */
     @GetMapping("/{id}")
     @Operation(summary = "Get room by ID", description = "Returns room details by ID")
-    public ResponseEntity<RoomDTO> getRoomById(@PathVariable Long id) {
+    public ResponseEntity<RoomDTO> getRoomById(
+            @PathVariable(value = "id") Long id) {  // ✅ Явное имя
+
         log.info("GET /api/v1/rooms/{}", id);
         RoomDTO room = roomService.getRoomById(id);
         return ResponseEntity.ok(room);
     }
 
-    /**
-     * POST /api/v1/rooms - создать новый номер (ADMIN)
-     */
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
@@ -83,9 +73,6 @@ public class RoomController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
-    /**
-     * PUT /api/v1/rooms/{id} - обновить номер (ADMIN)
-     */
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
@@ -94,7 +81,7 @@ public class RoomController {
             security = @SecurityRequirement(name = "Bearer Authentication")
     )
     public ResponseEntity<RoomDTO> updateRoom(
-            @PathVariable Long id,
+            @PathVariable(value = "id") Long id,  // ✅ Явное имя
             @Valid @RequestBody CreateRoomRequest request) {
 
         log.info("PUT /api/v1/rooms/{} - updating room", id);
@@ -102,9 +89,6 @@ public class RoomController {
         return ResponseEntity.ok(updated);
     }
 
-    /**
-     * DELETE /api/v1/rooms/{id} - удалить номер (ADMIN)
-     */
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
@@ -112,22 +96,21 @@ public class RoomController {
             description = "Deletes room by ID (ADMIN only)",
             security = @SecurityRequirement(name = "Bearer Authentication")
     )
-    public ResponseEntity<Void> deleteRoom(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteRoom(
+            @PathVariable(value = "id") Long id) {  // ✅ Явное имя
+
         log.info("DELETE /api/v1/rooms/{}", id);
         roomService.deleteRoom(id);
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * POST /api/v1/rooms/{id}/confirm-availability - подтвердить доступность (INTERNAL)
-     */
     @PostMapping("/{id}/confirm-availability")
     @Operation(
             summary = "Confirm room availability (INTERNAL)",
             description = "Confirms room availability and creates temporary booking slot"
     )
     public ResponseEntity<AvailabilityConfirmationDTO> confirmAvailability(
-            @PathVariable Long id,
+            @PathVariable(value = "id") Long id,  // ✅ Явное имя
             @Valid @RequestBody ConfirmAvailabilityRequest request) {
 
         log.info("POST /api/v1/rooms/{}/confirm-availability - requestId: {}", id, request.getRequestId());
@@ -135,17 +118,14 @@ public class RoomController {
         return ResponseEntity.ok(confirmation);
     }
 
-    /**
-     * POST /api/v1/rooms/{id}/release - освободить слот (INTERNAL)
-     */
     @PostMapping("/{id}/release")
     @Operation(
             summary = "Release room slot (INTERNAL)",
             description = "Releases temporary booking slot (compensation action)"
     )
     public ResponseEntity<Void> releaseSlot(
-            @PathVariable Long id,
-            @RequestParam String requestId) {
+            @PathVariable(value = "id") Long id,  // ✅ Явное имя
+            @RequestParam(value = "requestId") String requestId) {  // ✅ Явное имя
 
         log.info("POST /api/v1/rooms/{}/release - requestId: {}", id, requestId);
         roomService.releaseSlot(id, requestId);
