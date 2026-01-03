@@ -27,9 +27,9 @@
     <spring-cloud.version>2025.0.1</spring-cloud.version>
     <lombok.version>1.18.42</lombok.version>
     <mapstruct.version>1.6.3</mapstruct.version>
-      <jjwt.version>0.13.0</jjwt.version>
-      <resilience4j.version>2.3.0</resilience4j.version>
-      <springdoc.version>2.8.15</springdoc.version>
+    <jjwt.version>0.13.0</jjwt.version>
+    <resilience4j.version>2.3.0</resilience4j.version>
+    <springdoc.version>2.8.15</springdoc.version>
   </properties>
 
   <dependencyManagement>
