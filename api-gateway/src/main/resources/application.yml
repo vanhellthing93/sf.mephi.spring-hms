@@ -1,0 +1,120 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      # ?????????? CORS ?????????
+      server:
+        webflux:
+          discovery:
+            locator:
+              enabled: true
+              lower-case-service-id: true
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                          allowedOrigins: "*"
+                          allowedMethods:
+                            - GET
+                            - POST
+                            - PUT
+                            - DELETE
+                            - OPTIONS
+                          allowedHeaders: "*"
+          routes:
+            # Route for Booking Service (Authentication)
+                    - id: booking-service-auth
+                      uri: lb://booking-service
+                      predicates:
+                        - Path=/api/v1/auth/**
+                      filters:
+                        - name: CircuitBreaker
+                          args:
+                            name: bookingServiceCircuitBreaker
+                            fallbackUri: forward:/fallback/booking
+
+                    # Route for Booking Service (Bookings)
+                    - id: booking-service-bookings
+                      uri: lb://booking-service
+                      predicates:
+                        - Path=/api/v1/bookings/**
+                      filters:
+                        - name: CircuitBreaker
+                          args:
+                            name: bookingServiceCircuitBreaker
+                            fallbackUri: forward:/fallback/booking
+
+                    # Route for Hotel Service (Hotels)
+                    - id: hotel-service-hotels
+                      uri: lb://hotel-service
+                      predicates:
+                        - Path=/api/v1/hotels/**
+                      filters:
+                        - name: CircuitBreaker
+                          args:
+                            name: hotelServiceCircuitBreaker
+                            fallbackUri: forward:/fallback/hotel
+
+                    # Route for Hotel Service (Rooms)
+                    - id: hotel-service-rooms
+                      uri: lb://hotel-service
+                      predicates:
+                        - Path=/api/v1/rooms/**
+                      filters:
+                        - name: CircuitBreaker
+                          args:
+                            name: hotelServiceCircuitBreaker
+                            fallbackUri: forward:/fallback/hotel
+
+# Eureka Client Configuration
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${server.port}
+
+# Resilience4j Circuit Breaker Configuration
+resilience4j:
+  circuitbreaker:
+    instances:
+      bookingServiceCircuitBreaker:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+
+      hotelServiceCircuitBreaker:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+
+# Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway
+  endpoint:
+    health:
+      show-details: always
+    gateway:
+      access: none
+
+# Logging
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
+    org.springframework.cloud.loadbalancer: DEBUG
+    reactor.netty: INFO
+    sf.mephi.gateway: DEBUG
