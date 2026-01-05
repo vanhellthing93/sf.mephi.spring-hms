@@ -75,6 +75,13 @@ public class BookingService {
 
     /**
      * Создать новое бронирование (SAGA Pattern)
+     * Критерий 2: двухэтапный процесс бронирования с компенсацией
+     *
+     * SAGA Flow:
+     * Step 1: Создать booking в статусе PENDING
+     * Step 2: Подтвердить доступность в Hotel Service
+     * Step 3a: При успехе → перевести в CONFIRMED
+     * Step 3b: При ошибке → перевести в CANCELLED + компенсация
      */
     @Transactional
     @CircuitBreaker(name = ApiConstants.HOTEL_SERVICE_CIRCUIT_BREAKER, fallbackMethod = "createBookingFallback")
@@ -83,7 +90,7 @@ public class BookingService {
         String correlationId = CorrelationIdUtil.getCorrelationId();
         String requestId = UUID.randomUUID().toString();
 
-        log.info("Creating booking for user: {}, roomId: {}, requestId: {}, correlationId: {}",
+        log.info("Starting SAGA: Creating booking for user: {}, roomId: {}, requestId: {}, correlationId: {}",
                 username, request.getRoomId(), requestId, correlationId);
 
         // Валидация дат
@@ -92,50 +99,82 @@ public class BookingService {
         // Проверка идемпотентности
         Optional<Booking> existingBooking = bookingRepository.findByRequestId(requestId);
         if (existingBooking.isPresent()) {
-            log.info("Booking already exists for requestId: {}", requestId);
+            log.info("Idempotency check: Booking already exists for requestId: {}", requestId);
             return bookingMapper.toDTO(existingBooking.get());
         }
 
         User user = userService.getUserByUsername(username);
 
-        RoomDTO room = hotelServiceClient.getRoomById(request.getRoomId());
+        // ========================================
+        // SAGA ШАГ 1: Создать бронирование в статусе PENDING
+        // ========================================
+        Booking booking = bookingMapper.toEntity(request);
+        booking.setUser(user);
+        booking.setRequestId(requestId);
+        booking.setStatus(BookingStatus.PENDING);  // ✅ Сначала PENDING
 
-        if (!room.getAvailable()) {
-            throw new ValidationException(ApiConstants.ERROR_ROOM_UNAVAILABLE);
-        }
-
-        ConfirmAvailabilityRequest confirmRequest = ConfirmAvailabilityRequest.builder()
-                .requestId(requestId)
-                .startDate(request.getStartDate())
-                .endDate(request.getEndDate())
-                .build();
-
-        AvailabilityConfirmationDTO confirmation =
-                hotelServiceClient.confirmAvailability(request.getRoomId(), confirmRequest);
-
-        if (!confirmation.getConfirmed()) {
-            log.warn("Room availability not confirmed: {}", confirmation.getMessage());
-            throw new ValidationException(ApiConstants.ERROR_ROOM_UNAVAILABLE);
-        }
+        Booking savedBooking = bookingRepository.save(booking);
+        log.info("SAGA Step 1: Booking created in PENDING status, id: {}, requestId: {}",
+                savedBooking.getId(), requestId);
 
         try {
-            Booking booking = bookingMapper.toEntity(request);
-            booking.setUser(user);
-            booking.setRequestId(requestId);
-            booking.setStatus(BookingStatus.CONFIRMED);
+            // ========================================
+            // SAGA ШАГ 2: Проверка доступности и резервирование в Hotel Service
+            // ========================================
+            RoomDTO room = hotelServiceClient.getRoomById(request.getRoomId());
 
-            Booking saved = bookingRepository.save(booking);
-            log.info("Booking created with id: {}, requestId: {}", saved.getId(), requestId);
+            if (!room.getAvailable()) {
+                throw new ValidationException(ApiConstants.ERROR_ROOM_UNAVAILABLE);
+            }
 
-            return bookingMapper.toDTO(saved);
+            ConfirmAvailabilityRequest confirmRequest = ConfirmAvailabilityRequest.builder()
+                    .requestId(requestId)
+                    .startDate(request.getStartDate())
+                    .endDate(request.getEndDate())
+                    .build();
+
+            AvailabilityConfirmationDTO confirmation =
+                    hotelServiceClient.confirmAvailability(request.getRoomId(), confirmRequest);
+
+            if (!confirmation.getConfirmed()) {
+                log.warn("SAGA Step 2 Failed: Room availability not confirmed: {}", confirmation.getMessage());
+                throw new ValidationException(ApiConstants.ERROR_ROOM_UNAVAILABLE);
+            }
+
+            log.info("SAGA Step 2: Room availability confirmed for roomId: {}, requestId: {}",
+                    request.getRoomId(), requestId);
+
+            // ========================================
+            // SAGA ШАГ 3a: Перевести бронирование в CONFIRMED
+            // ========================================
+            savedBooking.setStatus(BookingStatus.CONFIRMED);
+            savedBooking = bookingRepository.save(savedBooking);
+
+            log.info("SAGA Completed Successfully: Booking confirmed, id: {}, status: CONFIRMED",
+                    savedBooking.getId());
+
+            return bookingMapper.toDTO(savedBooking);
 
         } catch (Exception e) {
-            // Компенсирующая транзакция
-            log.error("Failed to save booking, releasing slot. RequestId: {}", requestId, e);
+            // ========================================
+            // SAGA ШАГ 3b: Компенсация при ошибке
+            // ========================================
+            log.error("SAGA Failed: Error during booking confirmation, executing compensation. RequestId: {}",
+                    requestId, e);
+
+            // Перевести бронирование в CANCELLED
+            savedBooking.setStatus(BookingStatus.CANCELLED);
+            bookingRepository.save(savedBooking);
+
+            log.info("SAGA Compensation: Booking status changed to CANCELLED, id: {}", savedBooking.getId());
+
+            // Освободить слот в Hotel Service
             compensateBooking(request.getRoomId(), requestId);
+
             throw e;
         }
     }
+
 
     /**
      * Отменить бронирование (компенсация)
@@ -167,19 +206,48 @@ public class BookingService {
     }
 
     /**
-     * Компенсирующая транзакция: освобождение слота
+     * Компенсирующая транзакция: освобождение слота с повторными попытками
+     * Критерий 2: Надёжная компенсация при сбое Hotel Service
      */
     private void compensateBooking(Long roomId, String requestId) {
-        try {
-            log.info("Compensating booking - releasing slot for roomId: {}, requestId: {}",
-                    roomId, requestId);
-            hotelServiceClient.releaseSlot(roomId, requestId);
-            log.info("Slot released successfully");
-        } catch (Exception e) {
-            log.error("Failed to release slot during compensation: roomId={}, requestId={}",
-                    roomId, requestId, e);
+        int maxAttempts = 3;
+        int attempt = 0;
+        boolean success = false;
+
+        while (attempt < maxAttempts && !success) {
+            attempt++;
+            try {
+                log.info("Compensating booking - attempt {}/{} for roomId: {}, requestId: {}",
+                        attempt, maxAttempts, roomId, requestId);
+
+                hotelServiceClient.releaseSlot(roomId, requestId);
+
+                log.info("Compensation successful: slot released for roomId: {}", roomId);
+                success = true;
+
+            } catch (Exception e) {
+                log.error("Compensation attempt {}/{} failed for roomId: {}, requestId: {}: {}",
+                        attempt, maxAttempts, roomId, requestId, e.getMessage());
+
+                if (attempt < maxAttempts) {
+                    try {
+                        long backoffMillis = 1000L * attempt; // Exponential backoff: 1s, 2s, 3s
+                        log.info("Retrying compensation in {}ms...", backoffMillis);
+                        Thread.sleep(backoffMillis);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.error("Compensation retry interrupted", ie);
+                        break;
+                    }
+                } else {
+                    log.error("COMPENSATION FAILED after {} attempts for roomId: {}, requestId: {}. " +
+                                    "MANUAL INTERVENTION REQUIRED!️",
+                            maxAttempts, roomId, requestId);
+                }
+            }
         }
     }
+
 
     /**
      * Валидация дат бронирования
