@@ -8,7 +8,6 @@ import sf.mephi.booking.dto.request.AuthRequest;
 import sf.mephi.booking.dto.request.RegisterRequest;
 import sf.mephi.booking.dto.response.AuthResponse;
 import sf.mephi.booking.service.UserService;
-import sf.mephi.common.exception.ValidationException;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;

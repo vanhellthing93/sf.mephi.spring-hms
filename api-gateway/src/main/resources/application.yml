@@ -113,6 +113,8 @@ management:
 
 # Logging
 logging:
+  pattern: # ← pattern на одном уровне с level!
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] [%X{traceId}] %-5level %logger{36} - %msg%n"
   level:
     org.springframework.cloud.gateway: DEBUG
     org.springframework.cloud.loadbalancer: DEBUG

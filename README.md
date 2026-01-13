@@ -16,6 +16,7 @@
 - [Структура проекта](#-структура-проекта)
 - [API Документация](#-api-документация)
 - [SAGA Pattern](#-saga-pattern)
+- [Механизмы согласованности данных](#-механизмы-согласованности-данных)
 - [Безопасность](#-безопасность)
 - [Тестирование](#-тестирование)
 - [Архитектурные решения (ADR)](#-архитектурные-решения-adr)
@@ -708,6 +709,195 @@ feign:
         connectTimeout: 3000
         readTimeout: 3000
 ```
+
+## 🔒 Механизмы согласованности данных
+
+### Optimistic Locking (Room)
+
+Для предотвращения конфликтов при параллельных бронированиях используется **Optimistic Locking** через `@Version`:
+
+```java
+@Entity
+public class Room {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Version // Автоматическая проверка версии при UPDATE
+    private Long version;
+    
+    private Integer timesBooked;
+}
+```
+
+**SQL-запрос при обновлении:**
+```sql
+UPDATE rooms 
+SET times_booked = times_booked + 1,
+    version = version + 1
+WHERE id = ? AND version = ?
+```
+
+**Поведение при конфликте:**
+- ❌ Если `version` не совпадает → `OptimisticLockException`
+- 🔄 Приложение перехватывает исключение
+- 📤 Возвращает HTTP **409 Conflict** клиенту
+- 🔁 Клиент может повторить запрос с новыми данными
+
+**Пример обработки:**
+```java
+@Service
+public class RoomService {
+    
+    public void incrementBookingCount(Long roomId) {
+        try {
+            Room room = roomRepository.findById(roomId)
+                    .orElseThrow(() -> new NotFoundException("Room not found"));
+            
+            room.setTimesBooked(room.getTimesBooked() + 1);
+            roomRepository.save(room); // JPA автоматически проверит version
+            
+        } catch (OptimisticLockingFailureException e) {
+            throw new ValidationException("Room was modified by another transaction");
+        }
+    }
+}
+```
+
+**REST API ответ при конфликте:**
+```json
+{
+  "timestamp": "2026-01-14T00:09:00",
+  "status": 409,
+  "error": "Conflict",
+  "message": "Room was modified by another transaction",
+  "path": "/api/v1/rooms/1/book"
+}
+```
+
+---
+
+### Idempotency (Request Deduplication)
+
+Для предотвращения дублирования бронирований используется **идемпотентность** через `requestId`:
+
+```java
+@Entity
+public class Booking {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(unique = true, nullable = false)
+    private String requestId; // UUID от клиента
+    
+    // ... другие поля
+}
+```
+
+**SQL-запрос проверки:**
+```sql
+SELECT * FROM bookings WHERE request_id = ?
+```
+
+**Алгоритм:**
+```java
+public BookingDTO createBooking(CreateBookingRequest request, String requestId) {
+    // 1. Проверяем, существует ли бронирование с таким requestId
+    Optional<Booking> existing = bookingRepository.findByRequestId(requestId);
+    
+    if (existing.isPresent()) {
+        // 2. Если найдено → возвращаем существующее (БЕЗ создания нового)
+        log.info("Booking already exists for requestId={}", requestId);
+        return bookingMapper.toDTO(existing.get());
+    }
+    
+    // 3. Если не найдено → создаем новое бронирование
+    Booking booking = new Booking();
+    booking.setRequestId(requestId);
+    // ... устанавливаем остальные поля
+    
+    return bookingMapper.toDTO(bookingRepository.save(booking));
+}
+```
+
+**Пример запроса от клиента:**
+```bash
+curl -X POST http://localhost:8080/api/v1/bookings \
+  -H "Authorization: Bearer <token>" \
+  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "roomId": 1,
+    "startDate": "2026-03-01",
+    "endDate": "2026-03-05"
+  }'
+```
+
+**Поведение:**
+- 1️⃣ **Первый запрос** → создается новое бронирование
+- 2️⃣ **Повторный запрос** (с тем же `Idempotency-Key`) → возвращается существующее бронирование
+- ✅ Гарантия: не будет дубликатов, даже если клиент отправит запрос несколько раз
+
+---
+
+## 🔄 Сравнение подходов
+
+| Механизм | Цель | Когда срабатывает | Результат |
+|----------|------|-------------------|-----------|
+| **Optimistic Locking** | Предотвращение конфликтов при параллельных изменениях | При `UPDATE` с устаревшей версией | HTTP 409 + retry |
+| **Idempotency** | Предотвращение дублирования запросов | При повторной отправке с тем же `requestId` | Возврат существующей записи |
+
+---
+
+## 🧪 Тестирование
+
+### Тест Optimistic Locking:
+```java
+@Test
+void shouldThrowExceptionOnConcurrentUpdate() {
+    // Given: Два потока пытаются обновить одну комнату
+    Room room = roomRepository.findById(1L).orElseThrow();
+    Long initialVersion = room.getVersion();
+    
+    // When: Первый поток обновляет
+    room.setTimesBooked(room.getTimesBooked() + 1);
+    roomRepository.save(room);
+    
+    // Then: Второй поток с устаревшей версией получит ошибку
+    Room staleRoom = new Room();
+    staleRoom.setId(1L);
+    staleRoom.setVersion(initialVersion); // Старая версия!
+    staleRoom.setTimesBooked(10);
+    
+    assertThrows(OptimisticLockingFailureException.class, () -> {
+        roomRepository.save(staleRoom);
+    });
+}
+```
+
+### Тест Idempotency:
+```java
+@Test
+void shouldReturnSameBookingForDuplicateRequest() {
+    // Given
+    String requestId = UUID.randomUUID().toString();
+    CreateBookingRequest request = createTestRequest();
+    
+    // When: Отправляем запрос дважды
+    BookingDTO first = bookingService.createBooking(request, "user1", requestId);
+    BookingDTO second = bookingService.createBooking(request, "user1", requestId);
+    
+    // Then: Возвращается тот же объект
+    assertThat(first.getId()).isEqualTo(second.getId());
+    assertThat(first.getRequestId()).isEqualTo(second.getRequestId());
+    
+    // Verify: В БД только одна запись
+    long count = bookingRepository.countByRequestId(requestId);
+    assertThat(count).isEqualTo(1);
+}
+```
+
 
 ## 🔐 Безопасность
 
