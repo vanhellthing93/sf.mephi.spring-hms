@@ -65,7 +65,8 @@ public final class ApiConstants {
     public static final String ERROR_HOTEL_NOT_FOUND = "Hotel not found with id: %d";
     public static final String ERROR_ROOM_NOT_FOUND = "Room not found with id: %d";
     public static final String ERROR_BOOKING_NOT_FOUND = "Booking not found with id: %d";
-    public static final String ERROR_USER_NOT_FOUND = "User not found with id: %d";
+    public static final String ERROR_USER_NOT_FOUND_ID = "User not found with id: %d";
+    public static final String ERROR_USER_NOT_FOUND = "User not found with id: %s";
     public static final String ERROR_USER_ALREADY_EXISTS = "User with username '%s' already exists";
     public static final String ERROR_ROOM_UNAVAILABLE = "Room is not available for selected dates";
     public static final String ERROR_INVALID_DATE_RANGE = "End date must be after start date";

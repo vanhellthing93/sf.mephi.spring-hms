@@ -16,8 +16,8 @@ public class DateRangeValidator implements ConstraintValidator<ValidDateRange, O
 
     @Override
     public void initialize(ValidDateRange constraintAnnotation) {
-        this.startDateField = constraintAnnotation.startDate();
-        this.endDateField = constraintAnnotation.endDate();
+        this.startDateField = constraintAnnotation.start();
+        this.endDateField = constraintAnnotation.end();
     }
 
     @Override

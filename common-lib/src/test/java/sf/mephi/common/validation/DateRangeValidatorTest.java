@@ -20,8 +20,8 @@ class DateRangeValidatorTest {
     void setUp() {
         validator = new DateRangeValidator();
         ValidDateRange mockAnnotation = new ValidDateRange() {
-            @Override public String startDate() { return "startDate"; }
-            @Override public String endDate() { return "endDate"; }
+            @Override public String start() { return "startDate"; }
+            @Override public String end() { return "endDate"; }
             @Override public String message() { return "Invalid"; }
             @Override public Class<?>[] groups() { return new Class[0]; }
             @Override public Class[] payload() { return new Class[0]; }

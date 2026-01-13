@@ -112,7 +112,7 @@ public class UserService {
     public User getUserById(Long id) {
         return userRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException(
-                        String.format(ApiConstants.ERROR_USER_NOT_FOUND, id)
+                        String.format(ApiConstants.ERROR_USER_NOT_FOUND_ID, id)
                 ));
     }
 }
