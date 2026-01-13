@@ -32,4 +32,6 @@ public interface HotelServiceClient {
             @PathVariable(value = "id") Long id,
             @RequestParam(value = "requestId") String requestId
     );
+
+    List<RoomDTO> getRoomsByHotelId(long l);
 }
