@@ -30,6 +30,8 @@
     <jjwt.version>0.13.0</jjwt.version>
     <resilience4j.version>2.3.0</resilience4j.version>
     <springdoc.version>2.8.15</springdoc.version>
+    <mockito.version>5.21.0</mockito.version>
+    <maven.surefire.skip>false</maven.surefire.skip>
   </properties>
 
   <dependencyManagement>
