@@ -11,6 +11,8 @@ import org.springframework.web.context.request.WebRequest;
 import sf.mephi.common.dto.ErrorDTO;
 import sf.mephi.common.exception.NotFoundException;
 import sf.mephi.common.exception.ValidationException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import sf.mephi.common.util.CorrelationIdUtil;
 
 import java.time.LocalDateTime;
@@ -94,6 +96,21 @@ public class GlobalExceptionHandler {
                 .build();
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    @ExceptionHandler({AccessDeniedException.class, AuthorizationDeniedException.class})
+    public ResponseEntity<ErrorDTO> handleAccessDeniedException(
+            Exception ex, WebRequest request) {
+        log.error("Access denied: {}", ex.getMessage());
+        ErrorDTO error = ErrorDTO.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.FORBIDDEN.value())
+                .error(HttpStatus.FORBIDDEN.getReasonPhrase())
+                .message("Access denied")
+                .path(request.getDescription(false).replace("uri=", ""))
+                .traceId(CorrelationIdUtil.getCorrelationId())
+                .build();
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
     }
 
     @ExceptionHandler(Exception.class)

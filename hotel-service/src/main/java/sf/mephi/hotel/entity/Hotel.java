@@ -29,7 +29,7 @@ public class Hotel {
     @Column(nullable = false, length = 500)
     private String address;
 
-    @Column(length = 100)  // ✅ Добавьте это поле
+    @Column(length = 100)
     private String city;
 
     @CreationTimestamp
@@ -40,7 +40,6 @@ public class Hotel {
     @Builder.Default
     private List<Room> rooms = new ArrayList<>();
 
-    // Helper methods
     public void addRoom(Room room) {
         rooms.add(room);
         room.setHotel(this);
