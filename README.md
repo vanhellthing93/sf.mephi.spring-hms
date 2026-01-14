@@ -14,6 +14,7 @@
 - [Ключевые возможности](#-ключевые-возможности)
 - [Быстрый старт](#-быстрый-старт)
 - [Структура проекта](#-структура-проекта)
+- [Модель данных (ER-диаграмма)](#-модель-данных-er-диаграмма)
 - [API Документация](#-api-документация)
 - [SAGA Pattern](#-saga-pattern)
 - [Механизмы согласованности данных](#-механизмы-согласованности-данных)
@@ -156,7 +157,7 @@
 ### 5. Алгоритм распределения номеров
 - ✅ Сортировка по `timesBooked ASC, id ASC`
 - ✅ Равномерное распределение нагрузки
-- ✅ Optimistic locking для конкурентного доступа
+- ✅ Pessimistic + Optimistic locking для защиты критичных операций
 
 ## 🚀 Быстрый старт
 
@@ -311,6 +312,106 @@ sf.mephi.spring-hms/
     │           └── CorrelationIdUtil.java
     └── pom.xml
 ```
+
+## 🗄️ Модель данных (ER-диаграмма)
+
+Проект использует **микросервисную архитектуру с разделением баз данных** (Database per Service):
+- **Hotel Service** - управление отелями и номерами
+- **Booking Service** - управление пользователями и бронированиями
+
+### Hotel Service Database
+
+```mermaid
+erDiagram
+    HOTELS ||--o{ ROOMS : "contains"
+    
+    HOTELS {
+        bigint id PK
+        varchar name
+        varchar address
+        varchar city
+        decimal rating
+        timestamp created_at
+    }
+    
+    ROOMS {
+        bigint id PK
+        bigint hotel_id FK
+        varchar room_number
+        varchar room_type
+        decimal price
+        boolean available
+        integer times_booked
+        bigint version
+        varchar current_request_id
+        timestamp created_at
+    }
+```
+### Booking Service Database
+
+```mermaid
+erDiagram
+    USERS ||--o{ BOOKINGS : "makes"
+    BOOKINGS }o--|| ROOMS : "reserves"
+    BOOKINGS }o--|| HOTELS : "in"
+    
+    USERS {
+        bigint id PK
+        varchar username UK
+        varchar password_hash
+        varchar role
+        timestamp created_at
+        timestamp updated_at
+    }
+    
+    BOOKINGS {
+        bigint id PK
+        bigint user_id FK
+        bigint hotel_id FK
+        bigint room_id FK
+        date start_date
+        date end_date
+        varchar status
+        varchar request_id UK
+        timestamp created_at
+        timestamp updated_at
+    }
+```
+### Ключевые поля для механизмов согласованности
+
+| Таблица  | Поле               | Назначение                                                           |
+| -------- | ------------------ | -------------------------------------------------------------------- |
+| ROOMS    | version            | Optimistic Locking - автоматический инкремент при UPDATE             |
+| ROOMS    | times_booked       | Load Balancing - счётчик бронирований для равномерного распределения |
+| ROOMS    | current_request_id | Tracking - последний запрос, изменивший номер                        |
+| BOOKINGS | request_id         | Idempotency - уникальный UUID для предотвращения дублирования        |
+| BOOKINGS | status             | SAGA State - состояние транзакции (PENDING, CONFIRMED, CANCELLED)    |
+
+### Связи между микросервисами
+┌─────────────────────────────────────────────────────────┐
+│           Booking Service Database                      │
+│                                                         │
+│  USERS ──┬──> BOOKINGS                                 │
+│          │         │                                    │
+│          │         ├─── hotel_id (External Reference)  │──┐
+│          │         └─── room_id  (External Reference)  │──┼─┐
+│          │                                              │  │ │
+└──────────┼──────────────────────────────────────────────┘  │ │
+│                                                 │ │
+│    Cross-Service Communication via Feign       │ │
+│                                                 │ │
+┌──────────┼─────────────────────────────────────────────────┼─┼──┐
+│          │         Hotel Service Database               │ │ │
+│          │                                              │ │ │
+│          └────> HOTELS ◄──────────────────────────────────┘ │
+│                    │                                        │
+│                    └──> ROOMS ◄────────────────────────────┘
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+Примечание: hotel_id и room_id в таблице BOOKINGS являются логическими ссылками, а не внешними ключами на уровне БД, так как сервисы имеют отдельные базы данных.
+
+📖 Полная ER-диаграмма: docs/ER-DIAGRAM.md
 
 ## 📚 API Документация
 
@@ -712,28 +813,107 @@ feign:
 
 ## 🔒 Механизмы согласованности данных
 
-### Optimistic Locking (Room)
+### 1. Pessimistic Locking (Room Confirmation)
 
-Для предотвращения конфликтов при параллельных бронированиях используется **Optimistic Locking** через `@Version`:
+Для **критичных операций подтверждения бронирования** используется **Pessimistic Write Lock** (`PESSIMISTIC_WRITE`), который блокирует запись на уровне базы данных до завершения транзакции:
 
+```java
+// RoomRepository.java
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@Query("SELECT r FROM Room r WHERE r.id = :id")
+Optional<Room> findByIdWithLock(@Param("id") Long id);
+```
+
+**SQL-запрос при обновлении:**
+```sql
+SELECT * FROM rooms WHERE id = ? FOR UPDATE
+```
+**Использование в RoomService:**
+```java
+@Transactional
+public AvailabilityConfirmationDTO confirmAvailability(
+    Long roomId,
+    ConfirmAvailabilityRequest request) {
+    
+    // КРИТИЧНО: Pessimistic Lock для параллельных бронирований одного номера
+    Room room = roomRepository.findByIdWithLock(roomId)
+        .orElseThrow(() -> new NotFoundException("Room not found"));
+    
+    // Проверка доступности
+    if (!room.getAvailable()) {
+        return AvailabilityConfirmationDTO.builder()
+            .confirmed(false)
+            .message("Room is not available")
+            .build();
+    }
+    
+    // Атомарное обновление с Optimistic Lock (version)
+    try {
+        room.incrementTimesBooked();
+        room.setCurrentRequestId(request.getRequestId());
+        roomRepository.save(room);
+        
+        return AvailabilityConfirmationDTO.builder()
+            .confirmed(true)
+            .message("Room availability confirmed")
+            .build();
+            
+    } catch (OptimisticLockingFailureException e) {
+        throw new ValidationException("Room was modified by another transaction");
+    }
+}
+```
+
+Преимущества Pessimistic Lock:
+
+✅ Гарантирует отсутствие race condition при параллельных запросах
+
+✅ Блокирует строку в БД до завершения транзакции
+
+✅ Предотвращает двойное бронирование одного номера
+
+✅ Защищает критичные операции (подтверждение доступности)
+
+Когда срабатывает:
+
+При вызове confirmAvailability() из Booking Service
+
+При выборе оптимального номера selectOptimalRoomForBooking()
+
+В SAGA-транзакциях бронирования
+
+### Optimistic Locking (Room Updates)
+
+Для некритичных операций (обновление полей, статистика) используется Optimistic Locking через @Version:
 ```java
 @Entity
 public class Room {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    
+
     @Version // Автоматическая проверка версии при UPDATE
     private Long version;
-    
+
     private Integer timesBooked;
+
+    public void incrementTimesBooked() {
+        this.timesBooked = (this.timesBooked == null ? 0 : this.timesBooked) + 1;
+    }
+
+    public void decrementTimesBooked() {
+        if (this.timesBooked != null && this.timesBooked > 0) {
+            this.timesBooked--;
+        }
+    }
 }
+
 ```
 
 **SQL-запрос при обновлении:**
 ```sql
-UPDATE rooms 
-SET times_booked = times_booked + 1,
+UPDATE rooms
+SET times_booked = ?,
     version = version + 1
 WHERE id = ? AND version = ?
 ```
@@ -843,11 +1023,11 @@ curl -X POST http://localhost:8080/api/v1/bookings \
 
 ## 🔄 Сравнение подходов
 
-| Механизм | Цель | Когда срабатывает | Результат |
-|----------|------|-------------------|-----------|
-| **Optimistic Locking** | Предотвращение конфликтов при параллельных изменениях | При `UPDATE` с устаревшей версией | HTTP 409 + retry |
-| **Idempotency** | Предотвращение дублирования запросов | При повторной отправке с тем же `requestId` | Возврат существующей записи |
-
+| Механизм         | Тип блокировки                | Когда использовать                | Производительность         | Безопасность       |
+| ---------------- | ----------------------------- | --------------------------------- | -------------------------- | ------------------ |
+| Pessimistic Lock | Database-level (FOR UPDATE)   | Критичные операции (бронирование) | ⚠️ Средняя (блокировки)    | ✅ Максимальная     |
+| Optimistic Lock  | Application-level (@Version)  | Обновление полей, статистика      | ✅ Высокая (без блокировок) | ⚠️ Средняя (retry) |
+| Idempotency      | Application-level (requestId) | Предотвращение дублирования       | ✅ Высокая (кеш)            | ✅ Высокая          |
 ---
 
 ## 🧪 Тестирование
@@ -1199,6 +1379,114 @@ Optional<Room> findByIdWithLock(@Param("id") Long id);
 - ❌ Deprecated с 2018 года
 - ❌ Не поддерживает Spring Boot 3
 
+
+### ADR-005: Pessimistic + Optimistic Locking (Hybrid Approach)
+
+**Контекст:** Необходимость защиты критичных операций бронирования от race condition при сохранении высокой производительности.
+
+**Решение:** **Гибридный подход: Pessimistic Lock для критичных операций + Optimistic Lock для обычных обновлений**
+
+**Причины:**
+- ✅ Pessimistic Lock для `confirmAvailability()` **гарантирует** отсутствие двойного бронирования
+- ✅ Optimistic Lock для остальных операций **сохраняет производительность**
+- ✅ Лучший баланс между безопасностью и скоростью
+- ✅ Защита критичных путей без избыточной блокировки
+
+**Критичные операции (Pessimistic Lock):**
+- `confirmAvailability(roomId, request)` - подтверждение доступности номера в SAGA
+- `selectOptimalRoomForBooking(hotelId, roomType)` - выбор оптимального номера для бронирования
+
+**Некритичные операции (Optimistic Lock):**
+- `updateRoom(roomId, request)` - обновление полей номера (цена, описание)
+- `incrementTimesBooked()` / `decrementTimesBooked()` - изменение статистики
+- `releaseSlot(roomId, requestId)` - освобождение слота при компенсации
+
+**Реализация:**
+
+```java
+// RoomRepository.java
+public interface RoomRepository extends JpaRepository<Room, Long> {
+    
+    // Pessimistic Lock для критичных операций
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM Room r WHERE r.id = :id")
+    Optional<Room> findByIdWithLock(@Param("id") Long id);
+    
+    // Обычный SELECT для некритичных операций
+    Optional<Room> findById(Long id);
+}
+```
+```java
+// RoomService.java - критичная операция
+@Transactional
+public AvailabilityConfirmationDTO confirmAvailability(Long roomId, ConfirmAvailabilityRequest request) {
+// Используем Pessimistic Lock
+Room room = roomRepository.findByIdWithLock(roomId)
+.orElseThrow(() -> new NotFoundException("Room not found"));
+
+    // Бизнес-логика защищена от параллельных изменений
+    if (!room.getAvailable()) {
+        return AvailabilityConfirmationDTO.builder()
+            .confirmed(false)
+            .message("Room is not available")
+            .build();
+    }
+    
+    // Optimistic Lock (@Version) все равно проверится при save()
+    room.incrementTimesBooked();
+    roomRepository.save(room);
+    
+    return AvailabilityConfirmationDTO.builder()
+        .confirmed(true)
+        .build();
+}
+```
+
+```java 
+// RoomService.java - некритичная операция
+@Transactional
+public void updateRoom(Long roomId, UpdateRoomRequest request) {
+    // Используем обычный findById (без блокировки)
+    Room room = roomRepository.findById(roomId)
+        .orElseThrow(() -> new NotFoundException("Room not found"));
+    
+    room.setPrice(request.getPrice());
+    room.setDescription(request.getDescription());
+    
+    try {
+        // Optimistic Lock (@Version) автоматически проверит конфликты
+        roomRepository.save(room);
+    } catch (OptimisticLockingFailureException e) {
+        throw new ValidationException("Room was modified by another transaction. Please retry.");
+    }
+}
+```
+
+```sql
+-- Pessimistic Lock (критичные операции)
+SELECT * FROM rooms WHERE id = ? FOR UPDATE;
+
+-- Optimistic Lock (некритичные операции)
+UPDATE rooms 
+SET price = ?, description = ?, version = version + 1
+WHERE id = ? AND version = ?;
+```
+
+Метрики производительности:
+
+Pessimistic Lock: ~10-50ms задержка при высокой конкуренции
+
+Optimistic Lock: <1ms при отсутствии конфликтов
+
+Гибридный подход: оптимальный баланс для системы бронирования
+
+Альтернативы:
+
+❌ Только Pessimistic Lock - избыточная блокировка, снижение throughput
+
+❌ Только Optimistic Lock - риск двойного бронирования в критичных сценариях
+
+✅ Hybrid Approach - безопасность + производительность
 
 ## 👤 Автор
 
