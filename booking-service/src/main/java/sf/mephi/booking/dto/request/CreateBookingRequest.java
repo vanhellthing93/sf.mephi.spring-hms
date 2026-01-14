@@ -17,7 +17,6 @@ import java.time.LocalDate;
 @ValidDateRange(start = "startDate", end = "endDate")
 public class CreateBookingRequest {
 
-    @NotNull(message = "Room ID is required")
     private Long roomId;
 
     @NotNull(message = "Start date is required")

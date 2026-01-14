@@ -23,4 +23,12 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     List<Booking> findActiveBookings(@Param("status") BookingStatus status);
 
     List<Booking> findByStatus(BookingStatus status);
+
+    /**
+     * Подсчитать количество бронирований для комнаты в определённом статусе
+     * Используется для проверки балансировки нагрузки
+     */
+    @Query("SELECT COUNT(b) FROM Booking b WHERE b.roomId = :roomId AND b.status = :status")
+    long countByRoomIdAndStatus(@Param("roomId") Long roomId,
+                                @Param("status") BookingStatus status);
 }

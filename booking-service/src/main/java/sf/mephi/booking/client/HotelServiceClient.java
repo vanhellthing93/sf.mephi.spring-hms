@@ -33,5 +33,6 @@ public interface HotelServiceClient {
             @RequestParam(value = "requestId") String requestId
     );
 
+    @GetMapping("/{hotelId}/rooms")
     List<RoomDTO> getRoomsByHotelId(long l);
 }

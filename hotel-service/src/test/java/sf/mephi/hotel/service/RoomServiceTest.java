@@ -291,7 +291,7 @@ class RoomServiceTest {
                 .timesBooked(5)
                 .build();
 
-        when(roomRepository.findById(roomId)).thenReturn(Optional.of(room));
+        when(roomRepository.findByIdWithLock(roomId)).thenReturn(Optional.of(room));
         when(roomRepository.save(any(Room.class))).thenReturn(room);
 
         AvailabilityConfirmationDTO result = roomService.confirmAvailability(roomId, request);
@@ -301,7 +301,7 @@ class RoomServiceTest {
         assertEquals(roomId, result.getRoomId());
         assertTrue(result.getConfirmed());
         assertEquals("Room availability confirmed", result.getMessage());
-        verify(roomRepository).findById(roomId);
+        verify(roomRepository).findByIdWithLock(roomId);
         verify(roomRepository).save(room);
         assertEquals(6, room.getTimesBooked());
     }
@@ -317,7 +317,7 @@ class RoomServiceTest {
                 .build();
 
         Room room = Room.builder().id(roomId).available(true).timesBooked(5).build();
-        when(roomRepository.findById(roomId)).thenReturn(Optional.of(room));
+        when(roomRepository.findByIdWithLock(roomId)).thenReturn(Optional.of(room));
         when(roomRepository.save(any(Room.class))).thenReturn(room);
 
         roomService.confirmAvailability(roomId, request);
@@ -326,7 +326,7 @@ class RoomServiceTest {
 
         assertNotNull(result);
         assertTrue(result.getConfirmed());
-        verify(roomRepository, times(1)).findById(roomId);
+        verify(roomRepository, times(1)).findByIdWithLock(roomId);
         verify(roomRepository, times(1)).save(any());
     }
 
@@ -347,7 +347,7 @@ class RoomServiceTest {
                 .timesBooked(5)
                 .build();
 
-        when(roomRepository.findById(roomId)).thenReturn(Optional.of(room));
+        when(roomRepository.findByIdWithLock(roomId)).thenReturn(Optional.of(room));
 
         AvailabilityConfirmationDTO result = roomService.confirmAvailability(roomId, request);
 
@@ -356,7 +356,7 @@ class RoomServiceTest {
         assertEquals(roomId, result.getRoomId());
         assertFalse(result.getConfirmed());
         assertEquals("Room is not available", result.getMessage());
-        verify(roomRepository).findById(roomId);
+        verify(roomRepository).findByIdWithLock(roomId);
         verify(roomRepository, never()).save(any());
         assertEquals(5, room.getTimesBooked());
     }
@@ -371,7 +371,7 @@ class RoomServiceTest {
                 .endDate(LocalDate.of(2026, 3, 5))
                 .build();
 
-        when(roomRepository.findById(roomId)).thenReturn(Optional.empty());
+        when(roomRepository.findByIdWithLock(roomId)).thenReturn(Optional.empty());
 
         NotFoundException exception = assertThrows(
                 NotFoundException.class,
@@ -379,7 +379,7 @@ class RoomServiceTest {
         );
 
         assertTrue(exception.getMessage().contains("Room not found"));
-        verify(roomRepository).findById(roomId);
+        verify(roomRepository).findByIdWithLock(roomId);
         verify(roomRepository, never()).save(any());
     }
 

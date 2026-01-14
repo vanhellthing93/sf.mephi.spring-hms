@@ -163,8 +163,8 @@ class BookingControllerTest extends BaseControllerTest {
     @WithMockUser(username = "testuser", roles = "USER")
     void createBooking_ShouldReturn400_WhenValidationFails() throws Exception {
         CreateBookingRequest request = CreateBookingRequest.builder()
-                .roomId(null)  // Invalid: roomId is required
-                .startDate(LocalDate.of(2026, 3, 1))
+                .roomId(null)  // Это теперь ВАЛИДНО - автовыбор комнаты
+                .startDate(null)  // ← Невалидно: дата обязательна
                 .endDate(LocalDate.of(2026, 3, 5))
                 .build();
 

@@ -27,6 +27,7 @@ import sf.mephi.booking.mapper.BookingMapper;
 import sf.mephi.booking.repository.BookingRepository;
 
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -273,4 +274,59 @@ public class BookingService {
         log.error("Circuit breaker fallback triggered for createBooking: {}", e.getMessage());
         throw new ValidationException("Hotel service is temporarily unavailable. Please try again later.");
     }
+
+    /**
+     * Создать бронирование с автоматическим выбором оптимальной комнаты.
+     * Используется для балансировки нагрузки (Критерий 1).
+     *
+     * Алгоритм:
+     * 1. Получить рекомендованные комнаты (уже отсортированы по timesBooked)
+     * 2. Выбрать первую доступную (наименее загруженную)
+     * 3. Создать бронирование через основной метод createBooking
+     */
+    @Transactional
+    @CircuitBreaker(name = ApiConstants.HOTEL_SERVICE_CIRCUIT_BREAKER, fallbackMethod = "createBookingWithAutoSelectionFallback")
+    @Retry(name = ApiConstants.HOTEL_SERVICE_RETRY)
+    public BookingDTO createBookingWithAutoRoomSelection(
+            CreateBookingRequest request,
+            String username
+    ) {
+        log.info("Creating booking with automatic room selection for user: {}", username);
+
+        // 1. Получить рекомендованные комнаты (отсортированы по timesBooked ASC)
+        List<RoomDTO> recommendedRooms = hotelServiceClient.getRecommendedRooms();
+
+        if (recommendedRooms.isEmpty()) {
+            throw new ValidationException("No available rooms found");
+        }
+
+        // 2. Выбрать первую доступную комнату (наименее загруженная)
+        RoomDTO selectedRoom = recommendedRooms.stream()
+                .filter(RoomDTO::getAvailable)
+                .findFirst()
+                .orElseThrow(() -> new ValidationException("No available rooms found"));
+
+        log.info("Auto-selected room: {} (timesBooked: {})",
+                selectedRoom.getId(), selectedRoom.getTimesBooked());
+
+        // 3. Установить выбранную комнату в запрос
+        request.setRoomId(selectedRoom.getId());
+
+        // 4. Создать бронирование через основной метод
+        return createBooking(request, username);
+    }
+
+    /**
+     * Fallback для метода с автоматическим выбором комнаты
+     */
+    private BookingDTO createBookingWithAutoSelectionFallback(
+            CreateBookingRequest request,
+            String username,
+            Exception e
+    ) {
+        log.error("Circuit breaker fallback triggered for createBookingWithAutoRoomSelection: {}",
+                e.getMessage());
+        throw new ValidationException("Hotel service is temporarily unavailable. Please try again later.");
+    }
+
 }
